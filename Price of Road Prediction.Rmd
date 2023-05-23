@@ -1,0 +1,234 @@
+\-\-- install.packages("rmarkdown")
+
+title: "price of road" output: html_document: default word_document: default \-\--
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+files <- list.files("price_data")
+for (i in 1:length(files)){
+  files[i] <-  paste0("price_data/",files[i])
+}
+
+df <- 
+    files %>% 
+    map_df(~read_csv(.)) %>%
+    drop_na() %>%
+    distinct()
+
+wheter_data <- read_csv("ims_data.csv", locale=locale(encoding="latin1")) %>% select(-1)
+colnames(wheter_data) <- c("date","time","temp")
+wheter_data <- wheter_data %>% mutate(date = as.Date(date,format("%d-%m-%Y"))) %>% mutate(time = format(time, format = "%H:%M:%S"))
+
+test_df <- read_csv("EinBDW22_A3_predict_YechielDan.csv")
+test_df1 <- read_csv("EinBDW22_A3_predict_YechielDan.csv")
+```
+
+```{r}
+string_time = by_5_min$time[37]
+time_to_int(by_5_min$time[37])
+```
+
+```{r}
+time_to_int <- function(string_time){
+  splitted_str <- str_split(string_time,":")
+  return (strtoi(splitted_str[[1]][1],32L)*60 +  strtoi(splitted_str[[1]][2],32L))
+}
+get_df_by_window <- function(min_window){
+  by_window <- df %>%
+                mutate(time = as.POSIXlt(round(as.double(time)/(min_window*60))*(min_window*60),origin=(as.POSIXlt('1970-01-01')), tz = "UTC"))
+  
+  by_window <- by_window %>%
+                mutate(hour = lubridate::hour(time)) %>%
+                mutate(date = as.Date(time)) %>%
+                mutate(time = format(time, format = "%H:%M:%S")) %>%
+                mutate(time_as_int = map_dbl(time,time_to_int))%>%
+                mutate(day_of_week = lubridate::wday(date))%>%
+                mutate(month_of_year = lubridate::month(date))%>% 
+                group_by(date,hour,time,day_of_week,month_of_year,time_as_int) %>% summarise(price = mean(price))
+  return(by_window)
+  
+}
+
+by_hour <- get_df_by_window(60)
+by_30_min <- get_df_by_window(30)
+by_5_min <- get_df_by_window(5)
+```
+
+```{r}
+by_hour
+```
+
+```{r}
+
+```
+
+```{r}
+#join 2 dataframes
+by_hour <-  inner_join(by_hour,wheter_data,c("date","time"))
+```
+
+```{r}
+plot_realation_to_price <- function(df,column,f_wrap = "",box_plot = T,scatter_plot = F,line_plot = F,filter = F,remove_ticks = F){
+  if (filter){
+    df <- df %>% filter(time > "05:00:00") %>% filter(time < "12:00:00")
+  }
+  p <-  df %>% 
+    ggplot(aes(as.factor(!!sym(column)), price))
+  if (box_plot){
+    p <- p + geom_boxplot()
+  }
+  if (scatter_plot){
+    p <- p + geom_point()
+  }
+  if (f_wrap != ""){
+    p = p + facet_wrap(vars(!!sym(f_wrap)))
+  }
+  if (remove_ticks){
+    p <- p+theme(axis.ticks.x = element_blank(),axis.text.x = element_blank())
+  }
+  print(p)
+}
+
+colorfull_plot <- function(df,column,color,remove_ticks = F,filter = F){
+    if (filter){
+    df <- df %>% filter(time > "05:00:00") %>% filter(time < "12:00:00")
+    }
+    p <-  df %>% group_by(!!sym(column),!!sym(color)) %>% summarise(mean_price = mean(price)) %>%
+    ggplot(aes(!!sym(column), mean_price, color = as.factor(!!sym(color))))+
+      geom_line(aes(group = !!sym(color)))
+    if (remove_ticks){
+      p <- p+theme(axis.ticks.x = element_blank(),axis.text.x = element_blank())
+    }
+    
+    print(p)
+}
+
+plot_realation_to_price(by_5_min,"day_of_week")
+plot_realation_to_price(by_5_min %>% filter(price >7),"day_of_week") # getting rid of the minimum payment in order to see a better picture
+plot_realation_to_price(by_5_min,"time","day_of_week",filter = T,remove_ticks=T)
+plot_realation_to_price(by_5_min,"month_of_year",filter = T)
+plot_realation_to_price(by_5_min,"time","month_of_year",filter = T,remove_ticks=T)
+plot_realation_to_price(by_5_min,"time","day_of_week",box_plot = F,scatter_plot = T,filter = T,remove_ticks=T)
+plot_realation_to_price(by_hour,"temp","day_of_week",filter = T)
+plot_realation_to_price(by_hour,"temp","month_of_year",filter = T)
+colorfull_plot(by_30_min,"time","month_of_year",filter = T)
+colorfull_plot(by_30_min,"time","day_of_week",filter = T)
+colorfull_plot(by_hour,"temp","month_of_year",filter = T)
+colorfull_plot(by_hour,"temp","day_of_week",filter = T)
+#new
+colorfull_plot(x,"time","y",filter = T)
+```
+
+```{r}
+by_hour["hour_2"] = by_hour["hour"]^2
+by_5_min["hour_2"] = by_5_min["hour"]^2
+lm_model <- lm(price~hour +hour_2+ as.factor(day_of_week),by_hour)
+lm_model <- lm(price~hour*as.factor(day_of_week) +hour_2*as.factor(day_of_week),by_hour)
+summary(lm_model)
+```
+
+```{r}
+kmeans_results <- c()
+for (i in 1:10){
+  res <- kmeans(by_hour[c("hour","day_of_week","price")], i, iter.max = 25, nstart = 3, trace=FALSE)
+  kmeans_results[i] <- res$tot.withinss
+}
+ggplot() +
+  geom_point(aes(1:10,kmeans_results)) + 
+  geom_line(aes(1:10,kmeans_results))
+
+clusters <- kmeans(by_hour[c("hour","day_of_week","price")], 4, iter.max = 25, nstart = 3, trace=FALSE)
+clusters$centers
+
+```
+
+```{r}
+mean_price_by_hour <- df %>% 
+              mutate(time = format(time, format = "%H:%M:%S")) %>%
+              filter( time %in% c("07:00:00","08:00:00","09:00:00","10:00:00","11:00:00")) %>%
+              group_by(time) %>% 
+              summarize(mean_price = mean(price))
+mean_price_by_hour %>% mutate(time_be_saved_in_min= mean_price/100*60)
+```
+
+```{r}
+library(randomForest)
+library(caret)
+```
+
+
+```{r}
+by_5_min <- by_5_min %>% filter(hour >= 6) %>% filter(hour < 12)
+by_5_min["time_as_int_2"] <- by_5_min["time_as_int"]^2
+test_df <- test_df %>%
+   rename(time = partition_datetime) %>%
+                mutate(hour = lubridate::hour(time)) %>%
+                mutate(date = as.Date(time)) %>%
+                mutate(time = format(time, format = "%H:%M:%S")) %>%
+                mutate(time_as_int = map_dbl(time,time_to_int))%>%
+                mutate(day_of_week = lubridate::wday(date))%>%
+                mutate(month_of_year = lubridate::month(date))%>% 
+                group_by(date,hour,time,day_of_week,month_of_year,time_as_int) %>% summarise(price = mean(mean_price))
+test_df["time_as_int_2"] = test_df["time_as_int"]^2
+```
+
+```{r}
+mse_score <- function(y_true,y_pred){
+  return (mean((y_true - y_pred)^2))
+}
+
+rndf <- randomForest(price~ day_of_week + time_as_int + time_as_int*as.factor(day_of_week),data = by_5_min,
+             mtry = 5,ntree = 1000)
+
+lm_model <- lm(price~time_as_int*as.factor(day_of_week) +time_as_int_2*as.factor(day_of_week),by_5_min)
+
+cv_splits <- createFolds(by_5_min$price, k = 5)
+
+cv_lr <- function(df_split){
+  train_df <- by_5_min[-df_split,]
+  test_df <- by_5_min[df_split,]
+  
+  lm_mod <- lm(price~time_as_int*as.factor(day_of_week) +time_as_int_2*as.factor(day_of_week), data = train_df)
+  pred_lm <- predict(lm_mod, test_df)
+  pred_lm[pred_lm < 7] <-  7
+  mse_score(test_df$price, pred_lm)
+}
+
+cv_rndf <- function(df_split){
+  train_df <- by_5_min[-df_split,]
+  test_df <- by_5_min[df_split,]
+  
+  rndf <- randomForest(price~ day_of_week + time_as_int + time_as_int*as.factor(day_of_week),data = train_df,mtry = 5,ntree = 1000)
+  pred_lm <- predict(rndf, test_df)
+  mse_score(test_df$price, pred_lm)
+}
+
+lr_mse <- mean(map_dbl(cv_splits,cv_lr))
+lr_rndf <- mean(map_dbl(cv_splits,cv_rndf))
+
+```
+
+```{r}
+test_df["price"] = predict(rndf,test_df)
+test_df$price[test_df$price<7] = 7
+final <- test_df
+final$hour <- NULL
+final$day_of_week <- NULL
+final$month_of_year <- NULL
+final$time_as_int <- NULL
+final$time_as_int_2 <- NULL
+final1 <- data.frame(test_df1,final)
+final1$mean_price <- NULL
+final1$date <- NULL
+final1$time <- NULL
+colnames(final1) <- c('partition_datetime','mean_price')
+write_csv(final1,"EinBDW22_A3_predict_Yechiel_Dan.csv")
+```
+
